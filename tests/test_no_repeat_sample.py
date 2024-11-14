@@ -8,7 +8,7 @@ from carbs import ObservationInParam
 
 
 def test_no_repeat_random_suggestions(carbs_instance: CARBS) -> None:
-    num_to_suggest = 10
+    num_to_suggest = 30
     for i in range(num_to_suggest):
         # Simulate a case where the same seed is kept set elsewhere
         carbs_instance._set_seed(1)
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     carbs_params = CARBSParams(
         better_direction_sign=1,
         is_wandb_logging_enabled=False, 
-        resample_frequency=2,
+        resample_frequency=5,
         num_random_samples=5,
     )
 

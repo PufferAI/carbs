@@ -14,8 +14,9 @@ from carbs import ObservationInParam
 
 
 RANDOM_SEED = 42
-NUM_SUGGESTIONS = 20
-NUM_RANDOM_SAMPLES = 10
+NUM_SUGGESTIONS = 30
+NUM_RANDOM_SAMPLES = 7
+RESAMPLE_FREQUENCY = 5
 
 TEST_ARGS = {
     "train": {
@@ -219,7 +220,7 @@ def carbs_runner_fn(args, env_name, carbs, sweep_id, train_fn):
 
 
 if __name__ == "__main__":
-    carbs = init_carbs(TEST_ARGS, num_random_samples=NUM_RANDOM_SAMPLES)
+    carbs = init_carbs(TEST_ARGS, resample_frequency=RESAMPLE_FREQUENCY, num_random_samples=NUM_RANDOM_SAMPLES)
 
     rng = np.random.default_rng(RANDOM_SEED)
 
@@ -240,4 +241,3 @@ if __name__ == "__main__":
         # print("CARBS state:", carbs.get_state_dict(), "\n")
         print_pareto_front(carbs)
         print_pareto_front(carbs, is_conservative=True)
-        input("\nPress enter to continue...")
