@@ -293,6 +293,15 @@ class CARBS:
             input_in_basic < self.max_bounds_in_basic.unsqueeze(0)
         )
         mask = torch.logical_and(is_above_min_bounds, is_below_max_bounds)
+
+        # Also remove the samples that are in the success and failure observations
+        # Seeding in other places can lead to repeated samples, so we need to remove them here
+        observed_samples = [x.real_number_input for x in self.success_observations + self.failure_observations]
+        if len(observed_samples) > 0:
+            observed_samples = torch.stack(observed_samples)
+            new_sample_mask = ~torch.any(torch.isclose(input_in_basic[:, None], observed_samples[None, :]).all(dim=2), dim=1)
+            mask = torch.logical_and(mask, new_sample_mask)
+
         return mask
 
     def _round_integer_values_in_basic(self, input_in_basic: Tensor) -> Tensor:
