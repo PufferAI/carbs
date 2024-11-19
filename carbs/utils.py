@@ -506,7 +506,8 @@ def get_pareto_groups(
     # Calculate min_pareto_cost using group costs
     group_costs = [observation_group_cost(group) for group in grouped_observations]
     if len(group_costs) > 2:  # Need at least 3 points for meaningful quantile
-        min_pareto_cost = np.quantile(np.array(group_costs), min_pareto_cost_fraction)
+        quantile_cost = np.quantile(np.array(group_costs), min_pareto_cost_fraction)
+        min_pareto_cost = max(quantile_cost, min(group_costs))
     else:
         min_pareto_cost = min(group_costs)
 
@@ -568,7 +569,8 @@ def get_pareto_groups_conservative(
     # Calculate min_pareto_cost using group costs
     group_costs = [observation_group_cost(group) for group in grouped_observations]
     if len(group_costs) > 2:  # Need at least 3 points for meaningful quantile
-        min_pareto_cost = np.quantile(np.array(group_costs), min_pareto_cost_fraction)
+        quantile_cost = np.quantile(np.array(group_costs), min_pareto_cost_fraction)
+        min_pareto_cost = max(quantile_cost, min(group_costs))
     else:
         min_pareto_cost = min(group_costs)
 
