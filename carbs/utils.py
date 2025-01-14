@@ -123,6 +123,41 @@ class LinearSpace(RealNumberSpace):
     def plot_scale(self) -> str:
         return "linear"
 
+@attr.s(auto_attribs=True, hash=True)
+class Pow2Space(RealNumberSpace):
+    min: float = float("-inf")
+    max: float = float("+inf")
+
+    def __attrs_post_init__(self) -> None:
+        if self.is_integer and self.scale < 3:
+            logger.info(
+                "scale<3 on integer LinearSpace, so may not be able to search neighboring integers!"
+            )
+
+    def basic_from_param(self, value: ParamType) -> float:
+        assert isinstance(value, (int, float))
+        return value / self.scale
+
+    def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
+        value = 2**(int(np.log2(value * self.scale)))
+        if self.is_integer and is_rounded:
+            value = round(value / self.rounding_factor) * self.rounding_factor
+        return value
+
+    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
+        if self.is_integer:
+            return (
+                torch.round(value * self.scale / self.rounding_factor)
+                * self.rounding_factor
+                / self.scale
+            )
+        else:
+            return value
+
+    @property
+    def plot_scale(self) -> str:
+        return "linear"
+
 
 @attr.s(auto_attribs=True, hash=True)
 class LogSpace(RealNumberSpace):

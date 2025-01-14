@@ -143,9 +143,13 @@ class CARBS:
             self.device = f"cuda:{torch.cuda.current_device()}"
 
     def set_search_center(self, input_in_param: ParamDictType) -> None:
-        self.search_center_in_basic = self._param_space_real_to_basic_space_real(
-            input_in_param
-        )
+        try:
+            self.search_center_in_basic = self._param_space_real_to_basic_space_real(
+                input_in_param
+            )
+        except Exception as e:
+            breakpoint()
+            pass
 
     def suggest(
         self, suggestion_id: Optional[str] = None, is_suggestion_remembered: bool = True
