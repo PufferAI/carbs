@@ -55,6 +55,7 @@ class RealNumberSpace(ParamSpace):
     min: float = float("-inf")
     max: float = float("+inf")
     scale: float = 1.0
+    mean: float = 1.0
     is_integer: bool = False
     rounding_factor: int = 1
 
@@ -65,9 +66,9 @@ class RealNumberSpace(ParamSpace):
         raise NotImplementedError()
 
     def round_tensor_in_basic(self, value: Tensor) -> Tensor:
-        if not self.is_integer:
-            return value
-        raise NotImplementedError()
+        value = self.param_from_basic(value, is_rounded=True)
+        value = self.basic_from_param(value)
+        return value
 
     @property
     def min_bound(self):
@@ -101,28 +102,40 @@ class LinearSpace(RealNumberSpace):
 
     def basic_from_param(self, value: ParamType) -> float:
         assert isinstance(value, (int, float))
-        return value / self.scale
+        zero_one = (value - self.min)/(self.max - self.min)
+        return 2*zero_one - 1
 
     def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
-        value = value * self.scale
+        zero_one = (value + 1)/2
+        value = zero_one * (self.max - self.min) + self.min
         if self.is_integer and is_rounded:
             value = round(value / self.rounding_factor) * self.rounding_factor
         return value
-
-    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
-        if self.is_integer:
-            return (
-                torch.round(value * self.scale / self.rounding_factor)
-                * self.rounding_factor
-                / self.scale
-            )
-        else:
-            return value
 
     @property
     def plot_scale(self) -> str:
         return "linear"
 
+@attr.s(auto_attribs=True, hash=True)
+class Pow2Space(RealNumberSpace):
+    min: float = float("-inf")
+    max: float = float("+inf")
+
+    def basic_from_param(self, value: ParamType) -> float:
+        assert isinstance(value, (int, float))
+        assert value != 0.0
+        zero_one = (math.log(value, 2) - self.mean)/(math.log(self.max, 2) - math.log(self.min, 2))
+        return 2*zero_one - 1
+
+    def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
+        zero_one = (value + 1)/2
+        log_spaced = zero_one*(math.log(self.max, 2) - math.log(self.min, 2)) + self.mean
+        rounded = int(log_spaced)
+        return 2 ** rounded
+
+    @property
+    def plot_scale(self) -> str:
+        return "log"
 
 @attr.s(auto_attribs=True, hash=True)
 class LogSpace(RealNumberSpace):
@@ -132,28 +145,17 @@ class LogSpace(RealNumberSpace):
 
     def basic_from_param(self, value: ParamType) -> float:
         assert isinstance(value, (int, float))
-        if value == 0.0:
-            return float("-inf")
-        return math.log(value, self.base) / self.scale
+        assert value != 0.0
+        zero_one = (math.log(value, self.base) - self.mean)/(math.log(self.max, self.base) - math.log(self.min, self.base))
+        return 2*zero_one - 1
 
     def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
-        value = self.base ** (value * self.scale)
-        if self.is_integer and is_rounded:
-            value = round(value / self.rounding_factor) * self.rounding_factor
-        return value
-
-    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
+        zero_one = (value + 1)/2
+        log_spaced = zero_one*(math.log(self.max, self.base) - math.log(self.min, self.base)) + self.mean
+        value = self.base ** log_spaced
         if self.is_integer:
-            rounded_value = (
-                torch.round(self.base ** (value * self.scale) / self.rounding_factor)
-                * self.rounding_factor
-            )
-            if self.base == 10:
-                return torch.log10(rounded_value) / self.scale
-            else:
-                return torch.log(rounded_value) / self.scale / math.log(self.base)
-        else:
-            return value
+            value = round(value)
+        return value
 
     @property
     def plot_scale(self) -> str:
@@ -164,18 +166,21 @@ class LogSpace(RealNumberSpace):
 class LogitSpace(RealNumberSpace):
     min: float = 0.0
     max: float = 1.0
+    base: int = 10
+    clip: float = 1.0
 
     def basic_from_param(self, value: ParamType) -> float:
         assert isinstance(value, (int, float))
-        if value == 0.0:
-            return float("-inf")
-        if value == 1.0:
-            return float("+inf")
-        return math.log10(value / (1 - value)) / self.scale
+        assert value != 0.0
+        assert value != 1.0
+        one_minus = 1 - value
+        zero_one = (math.log(one_minus, self.base) - self.search_center)/(math.log(self.max, self.base) - math.log(self.min, self.base))
+        return 2*zero_one - 1
 
     def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
-        value = 1 / (10 ** (-value * self.scale) + 1)
-        return value
+        zero_one = (value + 1)/2
+        log_spaced = zero_one*(math.log(self.max, self.base) - math.log(self.min, self.base)) + self.mean
+        return 1 - self.base**log_spaced
 
     @property
     def plot_scale(self) -> str:
