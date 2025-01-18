@@ -65,11 +65,6 @@ class RealNumberSpace(ParamSpace):
     def param_from_basic(self, value: float, is_rounded: bool = True) -> ParamType:
         raise NotImplementedError()
 
-    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
-        value = self.param_from_basic(value, is_rounded=True)
-        value = self.basic_from_param(value)
-        return value
-
     @property
     def min_bound(self):
         # compensate for floats being bad bounds for integers
@@ -101,15 +96,18 @@ class LinearSpace(RealNumberSpace):
             )
 
     def basic_from_param(self, value: ParamType) -> float:
-        assert isinstance(value, (int, float))
+        #assert isinstance(value, (int, float))
         zero_one = (value - self.min)/(self.max - self.min)
         return 2*zero_one - 1
 
     def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
         zero_one = (value + 1)/2
         value = zero_one * (self.max - self.min) + self.min
-        if self.is_integer and is_rounded:
-            value = round(value / self.rounding_factor) * self.rounding_factor
+        if self.is_integer:
+            value = round(value)
+        return value
+
+    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
         return value
 
     @property
@@ -122,16 +120,19 @@ class Pow2Space(RealNumberSpace):
     max: float = float("+inf")
 
     def basic_from_param(self, value: ParamType) -> float:
-        assert isinstance(value, (int, float))
-        assert value != 0.0
-        zero_one = (math.log(value, 2) - self.mean)/(math.log(self.max, 2) - math.log(self.min, 2))
+        #assert isinstance(value, (int, float))
+        #assert value != 0.0
+        zero_one = (math.log(value, 2) - math.log(self.min, 2))/(math.log(self.max, 2) - math.log(self.min, 2))
         return 2*zero_one - 1
 
     def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
         zero_one = (value + 1)/2
-        log_spaced = zero_one*(math.log(self.max, 2) - math.log(self.min, 2)) + self.mean
-        rounded = int(log_spaced)
+        log_spaced = zero_one*(math.log(self.max, 2) - math.log(self.min, 2)) + math.log(self.min, 2)
+        rounded = round(log_spaced)
         return 2 ** rounded
+
+    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
+        return value
 
     @property
     def plot_scale(self) -> str:
@@ -144,17 +145,20 @@ class LogSpace(RealNumberSpace):
     base: int = 10
 
     def basic_from_param(self, value: ParamType) -> float:
-        assert isinstance(value, (int, float))
-        assert value != 0.0
-        zero_one = (math.log(value, self.base) - self.mean)/(math.log(self.max, self.base) - math.log(self.min, self.base))
+        #assert isinstance(value, (int, float))
+        #assert value != 0.0
+        zero_one = (math.log(value, self.base) - math.log(self.min, self.base))/(math.log(self.max, self.base) - math.log(self.min, self.base))
         return 2*zero_one - 1
 
     def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
         zero_one = (value + 1)/2
-        log_spaced = zero_one*(math.log(self.max, self.base) - math.log(self.min, self.base)) + self.mean
+        log_spaced = zero_one*(math.log(self.max, self.base) - math.log(self.min, self.base)) + math.log(self.min, self.base)
         value = self.base ** log_spaced
         if self.is_integer:
             value = round(value)
+        return value
+
+    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
         return value
 
     @property
@@ -167,20 +171,21 @@ class LogitSpace(RealNumberSpace):
     min: float = 0.0
     max: float = 1.0
     base: int = 10
-    clip: float = 1.0
 
     def basic_from_param(self, value: ParamType) -> float:
-        assert isinstance(value, (int, float))
-        assert value != 0.0
-        assert value != 1.0
-        one_minus = 1 - value
-        zero_one = (math.log(one_minus, self.base) - self.search_center)/(math.log(self.max, self.base) - math.log(self.min, self.base))
+        #assert isinstance(value, (int, float))
+        #assert value != 0.0
+        #assert value != 1.0
+        zero_one = (math.log(1-value, self.base) - math.log(1-self.min, self.base))/(math.log(1-self.max, self.base) - math.log(1-self.min, self.base))
         return 2*zero_one - 1
 
     def param_from_basic(self, value: float, is_rounded: bool = True) -> float:
         zero_one = (value + 1)/2
-        log_spaced = zero_one*(math.log(self.max, self.base) - math.log(self.min, self.base)) + self.mean
+        log_spaced = zero_one*(math.log(1-self.max, self.base) - math.log(1-self.min, self.base)) + math.log(1-self.min, self.base)
         return 1 - self.base**log_spaced
+
+    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
+        return value
 
     @property
     def plot_scale(self) -> str:

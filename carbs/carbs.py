@@ -314,6 +314,13 @@ class CARBS:
     def _param_space_real_to_basic_space_real(
         self, input_in_param: ParamDictType
     ) -> Tensor:
+        for k, dim in self._real_number_space_by_name.items():
+            basic = dim.basic_from_param(input_in_param[k])
+            if basic > 1 or basic < -1:
+                breakpoint()
+            #recon = dim.param_from_basic(basic)
+            #print(k, dim.mean, basic, recon)
+
         return torch.tensor(
             [
                 dim.basic_from_param(input_in_param[k])
@@ -396,7 +403,6 @@ class CARBS:
             logits=torch.zeros((origins_in_basic.shape[0],))
         ).sample(torch.Size((num_samples,)))
         origin_samples = origins_in_basic[origin_index]
-        breakpoint()
         real_samples: Tensor = (
             origin_samples
             + self._search_distribution_in_basic.sample(
