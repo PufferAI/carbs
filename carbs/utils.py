@@ -65,30 +65,8 @@ class RealNumberSpace(ParamSpace):
     def param_from_basic(self, value: float, is_rounded: bool = True) -> ParamType:
         raise NotImplementedError()
 
-    @property
-    def min_bound(self):
-        # compensate for floats being bad bounds for integers
-        if self.is_integer:
-            return self.min - 0.1
-        return self.min
-
-    @property
-    def max_bound(self):
-        # compensate for floats being bad bounds for integers
-        if self.is_integer:
-            return self.max + 0.1
-        return self.max
-
-    @property
-    def plot_scale(self) -> str:
-        raise NotImplementedError()
-
-
 @attr.s(auto_attribs=True, hash=True)
 class LinearSpace(RealNumberSpace):
-    min: float = float("-inf")
-    max: float = float("+inf")
-
     def __attrs_post_init__(self) -> None:
         if self.is_integer and self.scale < 3:
             logger.info(
@@ -107,18 +85,8 @@ class LinearSpace(RealNumberSpace):
             value = round(value)
         return value
 
-    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
-        return value
-
-    @property
-    def plot_scale(self) -> str:
-        return "linear"
-
 @attr.s(auto_attribs=True, hash=True)
 class Pow2Space(RealNumberSpace):
-    min: float = float("-inf")
-    max: float = float("+inf")
-
     def basic_from_param(self, value: ParamType) -> float:
         #assert isinstance(value, (int, float))
         #assert value != 0.0
@@ -131,17 +99,8 @@ class Pow2Space(RealNumberSpace):
         rounded = round(log_spaced)
         return 2 ** rounded
 
-    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
-        return value
-
-    @property
-    def plot_scale(self) -> str:
-        return "log"
-
 @attr.s(auto_attribs=True, hash=True)
 class LogSpace(RealNumberSpace):
-    min: float = 0.0
-    max: float = float("+inf")
     base: int = 10
 
     def basic_from_param(self, value: ParamType) -> float:
@@ -158,18 +117,8 @@ class LogSpace(RealNumberSpace):
             value = round(value)
         return value
 
-    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
-        return value
-
-    @property
-    def plot_scale(self) -> str:
-        return "log"
-
-
 @attr.s(auto_attribs=True, hash=True)
 class LogitSpace(RealNumberSpace):
-    min: float = 0.0
-    max: float = 1.0
     base: int = 10
 
     def basic_from_param(self, value: ParamType) -> float:
@@ -183,14 +132,6 @@ class LogitSpace(RealNumberSpace):
         zero_one = (value + 1)/2
         log_spaced = zero_one*(math.log(1-self.max, self.base) - math.log(1-self.min, self.base)) + math.log(1-self.min, self.base)
         return 1 - self.base**log_spaced
-
-    def round_tensor_in_basic(self, value: Tensor) -> Tensor:
-        return value
-
-    @property
-    def plot_scale(self) -> str:
-        return "logit"
-
 
 CategoricalTuple = Tuple[int, ...]
 SUGGESTION_ID_DICT_KEY = "suggestion_uuid"
@@ -216,7 +157,9 @@ def expected_improvement(
 ) -> Tensor:
     prior = Normal(0, 1)
     sigma = variance.sqrt()
-    z = (mu - best_mu - exploration_bias) / sigma
+    #z = (mu - best_mu - exploration_bias) / sigma
+    # Made z conservative
+    z = (mu - sigma - best_mu - exploration_bias) / sigma
     # original form:
     # ei: Tensor = sigma * torch.exp(prior.log_prob(z)) * (1 + z * torch.exp(log_norm_cdf(z) - prior.log_prob(z)))
     # simplified form:
@@ -322,6 +265,7 @@ class CARBSParams(Serializable):
     initial_search_radius: float = attr.field(
         validator=attr.validators.gt(0), default=0.3
     )
+    global_search_scale: float = 0.5
 
     exploration_bias: float = (
         1.0  # hyperparameter biasing BO acquisition function toward exploration
@@ -371,79 +315,6 @@ class SuggestOutput:
 @attr.s(auto_attribs=True, collect_by_mro=True)
 class ObserveOutput:
     logs: Dict[str, Any] = attr.Factory(dict)
-
-
-def load_observations_from_wandb_run(
-    run_name: str,
-    prefix: str = "observation/",
-    add_params: Optional[ParamDictType] = None,
-) -> List[ObservationInParam]:
-    api = wandb.Api()
-    run = api.run(run_name)
-    history_df = run.history()
-    observations: List[ObservationInParam] = []
-    for idx, row in (
-        history_df[[x for x in history_df.keys() if x.startswith(prefix)]]
-        .dropna()
-        .iterrows()
-    ):
-        input: Dict[str, ParamType] = {}
-        if add_params is not None:
-            input.update(add_params)
-        output = float("inf")
-        for k, v in row.to_dict().items():
-            if k == f"{prefix}output":
-                output = v
-            else:
-                input[k[len(prefix) :]] = v
-        observations.append(ObservationInParam(input=input, output=output))
-
-    return observations
-
-
-CARBS_CHECKPOINT_PREFIX = "carbs_"
-CARBS_CHECKPOINT_SUFFIX = "obs.pt"
-
-
-def get_checkpoint_obs_count(checkpoint_name: str) -> int:
-    return int(
-        checkpoint_name.removeprefix(CARBS_CHECKPOINT_PREFIX).removesuffix(
-            CARBS_CHECKPOINT_SUFFIX
-        )
-    )
-
-
-def load_latest_checkpoint_from_wandb_run(
-    run_path: str, temp_dir: Optional[str] = None
-) -> str:
-    api = wandb.Api()
-    run = api.run(run_path)
-    checkpoint_filenames = [
-        file.name
-        for file in run.files()
-        if file.name.startswith(CARBS_CHECKPOINT_PREFIX)
-        and file.name.endswith(CARBS_CHECKPOINT_SUFFIX)
-    ]
-    checkpoint_filenames = sorted(checkpoint_filenames, key=get_checkpoint_obs_count)
-    latest_checkpoint_filename = checkpoint_filenames[-1]
-    return load_checkpoint_from_wandb_run(
-        run_path, latest_checkpoint_filename, temp_dir
-    )
-
-
-def load_checkpoint_from_wandb_run(
-    run_path: str, checkpoint_filename: str, temp_dir: Optional[str] = None
-) -> str:
-    if temp_dir is None:
-        temp_dir = f"/tmp/carbs/{run_path}"
-        os.makedirs(temp_dir, exist_ok=True)
-
-    checkpoint_path = wandb.restore(
-        checkpoint_filename, run_path=run_path, replace=True, root=temp_dir
-    )
-    assert checkpoint_path is not None, "Could not load checkpoint"
-    return checkpoint_path.name
-
 
 def assert_empty(x: Sized, message: str = "unexpected elements") -> None:
     assert len(x) == 0, f"{message}: {x}"

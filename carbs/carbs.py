@@ -26,14 +26,12 @@ from loguru import logger
 from torch import Tensor
 from torch.distributions import Categorical
 from torch.distributions import Distribution
-from torch.distributions import Normal
+from torch.distributions import Normal, Uniform
 from wandb.sdk.lib import RunDisabled
 from wandb.sdk.wandb_run import Run
 
 from carbs.model import SurrogateModel
-from carbs.utils import CARBSParams, load_latest_checkpoint_from_wandb_run
-from carbs.utils import CARBS_CHECKPOINT_PREFIX
-from carbs.utils import CARBS_CHECKPOINT_SUFFIX
+from carbs.utils import CARBSParams
 from carbs.utils import ObservationGroup
 from carbs.utils import ObservationInBasic
 from carbs.utils import ObservationInParam
@@ -105,16 +103,28 @@ class CARBS:
 
         self.min_bounds_in_basic = torch.tensor(
             [
-                dim.basic_from_param(dim.min_bound)
+                dim.basic_from_param(dim.min)
                 for dim in self._real_number_space_by_name.values()
             ]
         )
         self.max_bounds_in_basic = torch.tensor(
             [
-                dim.basic_from_param(dim.max_bound)
+                dim.basic_from_param(dim.max)
                 for dim in self._real_number_space_by_name.values()
             ]
         )
+
+        search_scales = torch.tensor([dim.scale for dim in
+            self._real_number_space_by_name.values()])
+        self._search_distribution_in_basic = Normal(0, config.global_search_scale * search_scales)
+        # Way worse than normal
+        '''
+        self._search_distribution_in_basic = Uniform(
+            -config.global_search_scale * search_scales,
+            config.global_search_scale * search_scales
+        )
+        '''
+
         self._suggest_or_observe_lock = threading.Lock()
         self.outstanding_suggestions: Dict[str, SuggestionInBasic] = (
             {}
@@ -126,7 +136,7 @@ class CARBS:
         self.resample_count: int = 0
 
         num_dims_with_bounds = sum(
-            (not math.isinf(dim.min_bound)) or (not math.isinf(dim.max_bound))
+            (not math.isinf(dim.min)) or (not math.isinf(dim.max))
             for dim in self._real_number_space_by_name.values()
         )
         if num_dims_with_bounds > 10:
@@ -316,8 +326,16 @@ class CARBS:
     ) -> Tensor:
         for k, dim in self._real_number_space_by_name.items():
             basic = dim.basic_from_param(input_in_param[k])
-            if basic > 1 or basic < -1:
+
+            # Handle floating point errors
+            if basic > 1.001:
                 breakpoint()
+            elif basic > 1:
+                basic = 1
+            elif basic < -1.001:
+                breakpoint()
+            elif basic < -1:
+                basic = -1
             #recon = dim.param_from_basic(basic)
             #print(k, dim.mean, basic, recon)
 
@@ -388,10 +406,6 @@ class CARBS:
         self.success_observations.append(observation_in_basic)
         return observation_in_basic
 
-    @property
-    def _search_distribution_in_basic(self) -> Distribution:
-        return Normal(0, self.search_radius_in_basic)
-
     def _sample_around_origins_in_basic(
         self, num_samples: int, origins_in_basic: Tensor
     ) -> Tuple[Tensor, Tensor]:
@@ -406,30 +420,10 @@ class CARBS:
         real_samples: Tensor = (
             origin_samples
             + self._search_distribution_in_basic.sample(
-                torch.Size((num_samples, self.real_dim))
+                torch.Size((num_samples,))
             )
         )
-        probabilities = self._get_probability_in_search_space(
-            input_in_basic=real_samples, origins_in_basic=origins_in_basic
-        )
-        return real_samples, probabilities
-
-    def _get_probability_in_search_space(
-        self,
-        input_in_basic: Tensor,
-        origins_in_basic: Tensor,
-    ) -> Tensor:
-        input_distance = torch.norm(
-            input_in_basic.unsqueeze(1) - origins_in_basic.unsqueeze(0), dim=-1
-        ).to(self.device)
-        real_relative_probability_per_origin = torch.exp(
-            self._search_distribution_in_basic.log_prob(input_distance)
-        )
-        # we take the max probability origin
-        real_relative_probability: Tensor = real_relative_probability_per_origin.max(
-            dim=-1
-        ).values
-        return real_relative_probability
+        return real_samples, origin_index
 
     def _is_random_sampling(self) -> bool:
         # Random sampling as opposed to Bayesian optimization.
@@ -453,14 +447,14 @@ class CARBS:
             num_samples * self.overgenerate_candidate_factor, origins_in_basic
         )
 
-        valid_sample_mask = self._get_mask_for_invalid_points_in_basic(samples_in_basic)
-        samples_in_basic = samples_in_basic[valid_sample_mask][:num_samples]
-
-        if samples_in_basic.shape[0] < num_samples:
-            logger.warning(
-                f"Undergenerated valid samples, requested {num_samples} generated {samples_in_basic.shape[0]}"
-            )
-            self._crank_oversampling_up()
+        samples_in_basic = torch.clamp(samples_in_basic, self.min_bounds_in_basic, self.max_bounds_in_basic)
+        #valid_sample_mask = self._get_mask_for_invalid_points_in_basic(samples_in_basic)
+        #samples_in_basic = samples_in_basic[valid_sample_mask][:num_samples]
+        #if samples_in_basic.shape[0] < num_samples:
+        #    logger.warning(
+        #        f"Undergenerated valid samples, requested {num_samples} generated {samples_in_basic.shape[0]}"
+        #    )
+        #    self._crank_oversampling_up()
 
         suggestions_in_basic = [
             SuggestionInBasic(real_number_input=x) for x in samples_in_basic
@@ -489,70 +483,25 @@ class CARBS:
         origins_in_basic = torch.stack(
             [x[0].real_number_input for x in pareto_groups], dim=0
         )
-        samples_in_basic, probabilities = self._sample_around_origins_in_basic(
+        samples_in_basic, origin_index = self._sample_around_origins_in_basic(
             num_samples_to_generate * self.overgenerate_candidate_factor,
             origins_in_basic,
         )
 
-        # do rounding first
-        samples_in_basic = self._round_integer_values_in_basic(samples_in_basic)
+        # Clamp instead of mask
+        samples_in_basic = torch.clamp(samples_in_basic, self.min_bounds_in_basic, self.max_bounds_in_basic)
 
-        assert samples_in_basic.shape[0] > 0
+        surrogate_model_outputs = surrogate_model.observe_surrogate(samples_in_basic)
 
-        # This is why we overgenerated
-        valid_sample_mask = self._get_mask_for_invalid_points_in_basic(samples_in_basic)
-        samples_in_basic = samples_in_basic[valid_sample_mask][:num_samples_to_generate]
-        probabilities = probabilities[valid_sample_mask][:num_samples_to_generate]
-
-        if samples_in_basic.shape[0] < num_samples_to_generate:
-            logger.info(
-                f"Undergenerated valid samples, requested {num_samples_to_generate} generated {samples_in_basic.shape[0]}"
-            )
-            self._crank_oversampling_up()
-        if samples_in_basic.shape[0] == 0:
-            return None
-
+        # Do not useactual pareto cost instead of surrogate. Removing clamp allows
+        # surrogate to generate even under a perfect model. Just have to add a bias so
+        # it is positive. Using pareto instead of surrogate allows model to repeatedly
+        # generate higher-cost versions of existing points to score in aquisition fn
+        #pareto_costs = torch.tensor([pareto_groups[i][0].cost for i in origin_index]).to(surrogate_model_outputs.surrogate_output.device)
         surrogate_model_outputs = surrogate_model.observe_surrogate(samples_in_basic)
         assert surrogate_model_outputs.pareto_surrogate is not None
         assert surrogate_model_outputs.pareto_estimate is not None
-
         pareto_surrogate = surrogate_model_outputs.pareto_surrogate
-        if self.config.is_expected_improvement_pareto_value_clamped:
-            # Biasing technique to encourage higher cost exploration: Choose a random cost along pareto front, and make the pareto value there the minimum for all observations
-
-            # The pareto_groups are sorted, so the 0th and -1th elements represent the low and high values
-            log_min_cost = math.log(observation_group_cost(pareto_groups[0]))
-            if len(pareto_groups) > 1:
-                log_max_cost = math.log(observation_group_cost(pareto_groups[-1]))
-            else:
-                log_max_cost = log_min_cost
-            if self.config.max_suggestion_cost is not None:
-                log_max_cost = min(
-                    log_max_cost, math.log(self.config.max_suggestion_cost)
-                )
-
-            # Choose a random cost along the curve
-            cost_threshold = math.exp(random.uniform(log_min_cost, log_max_cost))
-
-            # Choose the surrogate value at that cost
-            pareto_surrogate_at_threshold = (
-                surrogate_model.get_pareto_surrogate_for_cost(cost_threshold)
-            )
-
-            # Modify the pareto surrogate to be at least that value. This effectively cuts off exploration of low expected value points, which biases the search toward the right side of the pareto curve.
-            pareto_surrogate = torch.clamp(
-                pareto_surrogate, min=pareto_surrogate_at_threshold
-            )
-
-        if self.config.is_expected_improvement_value_always_max:
-            # NB: Only used for ablations
-            best_pareto_group_output = observation_group_output(pareto_groups[-1])
-            best_output_in_surrogate = surrogate_model._target_to_surrogate(
-                torch.tensor([best_pareto_group_output])
-            ).item()
-            pareto_surrogate = (
-                torch.ones_like(pareto_surrogate) * best_output_in_surrogate
-            )
 
         max_cost_masking = torch.ones_like(surrogate_model_outputs.cost_estimate)
         if self.config.max_suggestion_cost is not None:
@@ -570,11 +519,12 @@ class CARBS:
             best_mu=pareto_surrogate,
             exploration_bias=self.config.exploration_bias,
         )
+        conservative_absolute = surrogate_model_outputs.surrogate_output - surrogate_model_outputs.surrogate_var.sqrt()
 
         # Central equation: bias points by expected improvement, prior probability, and success probability, excluding points that are too expensive
         acquisition_function_value = (
             ei_value
-            * probabilities
+            * conservative_absolute
             * surrogate_model_outputs.success_probability
             * max_cost_masking
         )
@@ -589,8 +539,8 @@ class CARBS:
             cost_estimate=surrogate_model_outputs.cost_estimate[best_idx].item(),
             target_estimate=surrogate_model_outputs.target_estimate[best_idx].item(),
             target_var=surrogate_model_outputs.target_var[best_idx].item(),
-            probabilities=probabilities[best_idx].item(),
             expected_improvement=ei_value[best_idx].item(),
+            conservative_absolute=conservative_absolute[best_idx].item(),
             success_probability=surrogate_model_outputs.success_probability[
                 best_idx
             ].item(),
@@ -906,15 +856,6 @@ class CARBS:
         torch.save(self.get_state_dict(), buf)
         buf.seek(0)
         return base64.b64encode(buf.read()).decode("utf-8")
-
-    def warm_start_from_wandb(
-        self,
-        run_name: str,
-        is_prior_observation_valid: bool = False,
-        added_parameters: Optional[ParamDictType] = None,
-    ) -> None:
-        filename = load_latest_checkpoint_from_wandb_run(run_name)
-        self.warm_start(filename, is_prior_observation_valid, added_parameters)
 
     def warm_start(
         self,
