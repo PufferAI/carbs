@@ -157,9 +157,9 @@ def expected_improvement(
 ) -> Tensor:
     prior = Normal(0, 1)
     sigma = variance.sqrt()
-    #z = (mu - best_mu - exploration_bias) / sigma
+    z = (mu - best_mu - exploration_bias) / sigma
     # Made z conservative
-    z = (mu - sigma - best_mu - exploration_bias) / sigma
+    #z = (mu - sigma - best_mu - exploration_bias) / sigma
     # original form:
     # ei: Tensor = sigma * torch.exp(prior.log_prob(z)) * (1 + z * torch.exp(log_norm_cdf(z) - prior.log_prob(z)))
     # simplified form:
@@ -265,7 +265,7 @@ class CARBSParams(Serializable):
     initial_search_radius: float = attr.field(
         validator=attr.validators.gt(0), default=0.3
     )
-    global_search_scale: float = 0.5
+    global_search_scale: float = 1.0
 
     exploration_bias: float = (
         1.0  # hyperparameter biasing BO acquisition function toward exploration
